@@ -1,4 +1,5 @@
 #include <cstdint>
+#include <iostream>
 #include <verilated_fst_c.h>
 
 static bool wave_enable     = true;
@@ -68,7 +69,7 @@ int main(int argc, char **argv){
 
         EvalNegedge(time, top);
 
-        // lcrdv
+        // ready
         PutChannelRXSNP(top, chitest);
         PutChannelRXRSP(top, chitest);
         PutChannelRXDAT(top, chitest);

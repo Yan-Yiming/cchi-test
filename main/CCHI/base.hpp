@@ -7,6 +7,29 @@ enum class CCHIOpcodeEVT {
     //              = 3,
 };
 
+enum class CCHIOpcodeREQ {
+    StashShared     = 0x0,
+    ReadUnique      = 0x10
+};
+
+enum class CCHIOpcodeRSP {
+    CompStash       = 0,
+    Comp            = 1,
+    DBIDResp        = 2,
+    CompDBIDResp    = 3
+};
+
+enum class CCHIOpcodeDAT_UP {
+    CompData       = 0
+};
+
+enum class CCHIOpcodeDAT_DOWN {
+    NonCopyBackWrData   = 0,
+    NCBWrDataCompAck    = 1,
+    CopyBackWrData      = 2,
+    SnpRespData         = 3
+};
+
 namespace CCHI {
     class Flit {
     };
@@ -63,6 +86,7 @@ namespace CCHI {
     class BundleChannelRSP : public DecoupledBundle {
     public:
         uint8_t     txnID;
+        uint8_t     dbID;
         uint8_t     opcode;
         uint8_t     respErr;
         uint8_t     resp;
@@ -84,7 +108,7 @@ namespace CCHI {
         uint8_t     way;
         uint8_t     traceTag;
         uint32_t    be;
-        uint64_t    data[4];
+        uint8_t     data[32];
     };
 
     class FCBundle {
