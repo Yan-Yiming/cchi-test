@@ -15,7 +15,7 @@ void CHISequencer::Tock() {
     if (!IsAlive())
         return;
     
-    fcagent->handle_channel();
+    fcagent->FIRE();
     fcagent->random_test();
-    fcagent->update_signal();
+    fcagent->SEND();
 }

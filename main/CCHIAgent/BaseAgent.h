@@ -1,11 +1,11 @@
 #include <memory>
 #include <set>
+#include <random>
 #include <cstdint>
 #include <assert.h>
-#include <random>
 #include <unordered_map>
 #include "../CCHI/xact.h"
-#include "../CCHI/base.hpp"
+#include "../CCHI/cchi_base.hpp"
 #include "../Utils/ScoreBoard.hpp"
 
 typedef uint64_t paddr_t;
@@ -104,9 +104,9 @@ namespace CCHIAgent {
         CCHI::FCBundle*     port;
     
     public:
-        void        handle_channel();
+        void        FIRE();
         void        random_test();
-        void        update_signal();
+        void        SEND();
 
         void        fire_txevt();
         void        fire_txreq();
@@ -119,9 +119,10 @@ namespace CCHIAgent {
         void        send_txevt(std::shared_ptr<CCHI::BundleChannelEVT> &txevt, uint8_t alias);
         void        send_txreq(std::shared_ptr<CCHI::BundleChannelREQ> &txreq, uint8_t alias);
         void        send_txdat(std::shared_ptr<CCHI::BundleChannelDAT> &txdat, uint8_t alias);
+        void        send_txrsp(std::shared_ptr<CCHI::BundleChannelRSP> &txrsp, uint8_t alias);
 
 
-        bool        do_writebackfull(paddr_t addr);
-        bool        do_readunique(paddr_t addr);
+        bool        do_WriteBackFull(paddr_t addr);
+        bool        do_ReadUnique(paddr_t addr);
     };
 }

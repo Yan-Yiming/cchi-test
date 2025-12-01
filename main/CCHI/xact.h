@@ -1,8 +1,8 @@
 #include <cstdint>
 #include <assert.h>
-#include "base.hpp"
+#include "cchi_base.hpp"
 
-enum class Xact_type {
+enum class XactType {
     EVT = 0,
     SNP = 1,
     REQ = 2
@@ -90,7 +90,7 @@ namespace Xact {
             assert(isReadUniqueComplete == false);
             isReadUniqueComplete = true;
         }
-        void FireRXDAT() override {
+        void FireRXDAT(int ) override {
             assert(isCompDataComplete == false);
             isCompDataComplete = true;
         }

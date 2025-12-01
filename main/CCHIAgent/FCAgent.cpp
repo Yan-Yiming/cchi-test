@@ -1,6 +1,6 @@
 #include "BaseAgent.h"
 
-void CCHIAgent::FCAgent::handle_channel() {
+void CCHIAgent::FCAgent::FIRE() {
     fire_txevt();
     fire_txreq();
     fire_rxsnp();
@@ -10,12 +10,18 @@ void CCHIAgent::FCAgent::handle_channel() {
     fire_rxdat();
 }
 
-void CCHIAgent::FCAgent::update_signal() {
+void CCHIAgent::FCAgent::SEND() {
     if (pendingTXEVT.is_pending()) {
         send_txevt(pendingTXEVT.info, 0);
     }
+    if (pendingTXREQ.is_pending()) {
+        send_txreq(pendingTXREQ.info, 0);
+    }
     if (pendingTXDAT.is_pending()) {
-        send_txevt(pendingTXEVT.info, 0);
+        send_txdat(pendingTXDAT.info, 0);
+    }
+    if (pendingTXRSP.is_pending()) {
+        send_txrsp(pendingTXRSP.info, 0);
     }
 }
 
@@ -68,6 +74,7 @@ void CCHIAgent::FCAgent::fire_rxrsp() {
             txdat->txnID    = chnRSP.dbID;
             txdat->opcode   = uint8_t(CCHIOpcodeDAT_DOWN::CopyBackWrData);
             for (int i = 0; i < 32; ++i) {
+                // TODO
                 txdat->data[i] = (uint8_t)random();
             }
             pendingTXDAT.init(txdat, 4);
@@ -105,14 +112,14 @@ void CCHIAgent::FCAgent::send_txevt(std::shared_ptr<CCHI::BundleChannelEVT> &txe
     auto entry = this->localBoard.find(txevt->addr);
     if (entry == this->localBoard.end()) {
         assert(false);
-        // localBoardEntry new_entry(Xact_type::EVT, CCHI::State::INV, 0);
+        // localBoardEntry new_entry(XactType::EVT, CCHI::State::INV, 0);
         // this->localBoard.insert(std::make_pair(addr, new_entry));
     }
     else {
         this->localBoard[txevt->addr].state[alias]  = CCHI::State::INV;
         this->localBoard[txevt->addr].dirty[alias]  = 0;
         this->localBoard[txevt->addr].inflight      = true;
-        this->localBoard[txevt->addr].inflight_xact = Xact_type::EVT;
+        this->localBoard[txevt->addr].inflight_xact = XactType::EVT;
 
         switch (CCHIOpcodeEVT(txevt->opcode)) { 
             case CCHIOpcodeEVT::Evict:
@@ -136,17 +143,16 @@ void CCHIAgent::FCAgent::send_txreq(std::shared_ptr<CCHI::BundleChannelREQ> &txr
 
     auto entry = this->localBoard.find(txreq->addr);
     if (entry == this->localBoard.end()) {
-        localBoardEntry new_entry(Xact_type::REQ, CCHI::State::INV, 0, 0);
+        localBoardEntry new_entry(XactType::REQ, CCHI::State::INV, 0, 0);
         this->localBoard.insert(std::make_pair(txreq->addr, new_entry));
     }
     else {
         if (entry->second.inflight) {
             switch (entry->second.inflight_xact) {
-                case Xact_type::EVT:
-                case Xact_type::SNP:
+                case XactType::EVT: case XactType::SNP:
                     can_send = false;
                     break;
-                case Xact_type::REQ:
+                case XactType::REQ:
                     assert(false);
                     break;
                 default:
@@ -156,7 +162,7 @@ void CCHIAgent::FCAgent::send_txreq(std::shared_ptr<CCHI::BundleChannelREQ> &txr
         }
         else {
             entry->second.inflight = true;
-            entry->second.inflight_xact = Xact_type::REQ;
+            entry->second.inflight_xact = XactType::REQ;
         }
     }
 
@@ -175,19 +181,19 @@ void CCHIAgent::FCAgent::send_txdat(std::shared_ptr<CCHI::BundleChannelDAT> &txd
     this->port->txdat.txnID     = txdat->txnID;
 }
 
-bool CCHIAgent::FCAgent::do_writebackfull(paddr_t addr) {
+bool CCHIAgent::FCAgent::do_WriteBackFull(paddr_t addr) {
     if (pendingTXEVT.is_pending())
         return false;
 
     auto txevt = std::make_shared<CCHI::BundleChannelEVT>();
-    txevt->addr     = addr;
-    txevt->opcode   = uint8_t(CCHIOpcodeEVT::WriteBackFull);
     txevt->txnID    = this->idpool.getid();
+    txevt->opcode   = uint8_t(CCHIOpcodeEVT::WriteBackFull);
+    txevt->addr     = addr;
     pendingTXEVT.init(txevt, 1);
     return true;
 }
 
-bool CCHIAgent::FCAgent::do_readunique(paddr_t addr) {
+bool CCHIAgent::FCAgent::do_ReadUnique(paddr_t addr) {
     if (pendingTXREQ.is_pending())
         return false;
     

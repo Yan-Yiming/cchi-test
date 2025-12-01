@@ -1,9 +1,10 @@
 #pragma once
 
 #include <array>
+#include <cstddef>
 #include <type_traits>
 
-#include "base.hpp"
+#include "cchi_base.hpp"
 #include "../common/nonstdint.hpp"
 
 
