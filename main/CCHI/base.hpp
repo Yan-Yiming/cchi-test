@@ -1,4 +1,40 @@
+#pragma once
+
 #include <cstdint>
+#include <climits>
+
+namespace CCHI {
+
+    namespace details {
+
+        template<class T>
+        class Enumeration {
+        public:
+            const char*     name;
+            const int       value;
+            const T* const  prev;
+
+        public:
+            inline constexpr Enumeration(const char* name, const int value, const T* const prev = nullptr) noexcept
+            : name(name), value(value), prev(prev) { }
+
+            inline constexpr operator int() const noexcept
+            { return value; }
+
+            inline constexpr operator const T*() const noexcept
+            { return static_cast<const T*>(this); };
+
+            inline constexpr bool operator==(const T& obj) const noexcept
+            { return value == obj.value; }
+
+            inline constexpr bool operator!=(const T& obj) const noexcept
+            { return !(*this == obj); }
+
+            inline constexpr bool IsValid() const noexcept
+            { return value != INT_MIN; }
+        };
+    }
+}
 
 enum class CCHIOpcodeEVT {
     Evict           = 0,
