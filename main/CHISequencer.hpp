@@ -19,7 +19,7 @@ public:
     uint64_t    cycles;
 
     FCAgent     *fcagent;
-    std::unordered_map<paddr_t, globalBoardEntry>   globalBoard;
+    std::unordered_map<paddr_t, globalBoardEntry> globalBoard;
 
     CHISequencer();
     ~CHISequencer();

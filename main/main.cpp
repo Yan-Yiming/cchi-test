@@ -1,5 +1,6 @@
 #include <cstdint>
 #include <iostream>
+#include <CHISequencer.hpp>
 #include <verilated_fst_c.h>
 
 static bool wave_enable     = true;

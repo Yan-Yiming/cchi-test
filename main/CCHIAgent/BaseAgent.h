@@ -1,10 +1,15 @@
+// cchi-test/main/CCHIAgent/BaseAgent.h
+#pragma once
+
 #include <memory>
 #include <set>
 #include <random>
 #include <cstdint>
 #include <assert.h>
 #include <unordered_map>
-#include "../CCHI/xact.h"
+#include <iostream>
+
+#include "../CCHI/cchi_xact.h"
 #include "../CCHI/cchi_base.hpp"
 #include "../Utils/ScoreBoard.hpp"
 
@@ -12,6 +17,7 @@ typedef uint64_t paddr_t;
 
 namespace CCHIAgent {
 
+    // 发送队列辅助类：负责将一个逻辑包拆分为多个物理 Beat 发送
     template<typename T>
     class PendingTrans {
     public:
@@ -19,110 +25,155 @@ namespace CCHIAgent {
         int nr_beat;
         std::shared_ptr<T> info;
 
-        PendingTrans() {
-            nr_beat = 0;
-            beat_cnt = 0;
-        }
+        PendingTrans() : beat_cnt(0), nr_beat(0) {}
         ~PendingTrans() = default;
 
-        bool is_multiBeat() { return (this->nr_beat != 1); };
-        bool is_pending() { return (beat_cnt != 0); }
-        void init(std::shared_ptr<T> &info, int nr_beat) {
+        bool is_pending() const { return (beat_cnt > 0); }
+        
+        // 初始化发送任务
+        void init(std::shared_ptr<T> info, int beats) {
             this->info = info;
-            this->nr_beat = nr_beat;
-            beat_cnt = nr_beat;
+            this->nr_beat = beats;
+            this->beat_cnt = beats;
         }
+
+        // 每发送一个 Beat 调用一次
         void update() {
-            beat_cnt--;
-            tlc_assert(beat_cnt >= 0);
+            if (beat_cnt > 0) beat_cnt--;
         }
     };
 
+    // ID 管理池：防止 TxnID 冲突
     class IDPool {
     private:
-        std::set<int> *idle_ids;
-        std::set<int> *used_ids;
-        int pending_freeid;
+        std::set<int> idle_ids;
+        std::set<int> used_ids;
     public:
         IDPool(int start, int end) {
-            idle_ids = new std::set<int>();
-            used_ids = new std::set<int>();
             for (int i = start; i < end; i++) {
-                idle_ids->insert(i);
+                idle_ids.insert(i);
             }
-            used_ids->clear();
-            pending_freeid = -1;
         }
-        ~IDPool() {
-            delete idle_ids;
-            delete used_ids;
-        }
+        ~IDPool() = default;
+
         int getid() {
-            if (idle_ids->size() == 0)
-                return -1;
-            int ret = *idle_ids->begin();
-            used_ids->insert(ret);
-            idle_ids->erase(ret);
+            if (idle_ids.empty()) return -1;
+            int ret = *idle_ids.begin();
+            idle_ids.erase(ret);
+            used_ids.insert(ret);
             return ret;
         }
+
         void freeid(int id) {
-            this->pending_freeid = id;
-        }
-        bool full() {
-            return idle_ids->empty();
+            if (used_ids.count(id)) {
+                used_ids.erase(id);
+                idle_ids.insert(id);
+            }
         }
     };
-
 
     class BaseAgent {
     public:
-        IDPool      idpool;
+        IDPool idpool;
+        uint64_t* cycles; // 指向仿真时间的指针
+
+        BaseAgent(int id_start, int id_end) : idpool(id_start, id_end), cycles(nullptr) {}
+        virtual ~BaseAgent() = default;
+
+        void setCycles(uint64_t* c) { cycles = c; }
     };
 
-    // type 1: full coherent agent
-    class FCAgent : public BaseAgent{
-
+    // Type 1: Fully Coherent Agent
+    class FCAgent : public BaseAgent {
     private:
-        uint64_t    *cycles;
-
-        // txnID to xact
-        std::unordered_map<uint8_t, std::shared_ptr<Xact::Xaction>>     Transactions;
-        // std::unordered_map<uint8_t, Xact::Xaction>     Transactions;
+        // 核心存储：TxnID -> 事务对象 (多态基类指针)
+        std::unordered_map<uint16_t, std::shared_ptr<Xact::Xaction>> Transactions;
         
-        // std::unordered_map<uint64_t, Xact::Xaction> evtTransactions;
-        // std::unordered_map<uint64_t, Xact::Xaction> reqTransactions;
-        // std::unordered_map<uint64_t, Xact::Xaction> snpTransactions;
+        // 路由表：DBID -> TxnID (用于 WriteBack 数据通道的路由)
+        std::unordered_map<uint16_t, uint16_t> DBID2TxnID;
+        
+        // 本地记分牌：维护 Cache 状态 (MESI)
+        std::unordered_map<paddr_t, localBoardEntry> localBoard;
 
-        std::unordered_map<paddr_t, localBoardEntry>    localBoard;
-        std::unordered_map<uint64_t, uint64_t>          DBID2TxnID;
+        // 物理层发送队列 (Flow Control)
+        PendingTrans<CCHI::BundleChannelEVT> pendingTXEVT;
+        PendingTrans<CCHI::BundleChannelREQ> pendingTXREQ;
+        PendingTrans<CCHI::BundleChannelRSP> pendingTXRSP;
+        PendingTrans<CCHI::BundleChannelDAT> pendingTXDAT; // 发送数据
+        // 注意：接收侧 pendingRXDAT 不需要了，因为逻辑由 Xaction 内部处理
 
-        PendingTrans<CCHI::BundleChannelEVT>    pendingTXEVT;
-        PendingTrans<CCHI::BundleChannelREQ>    pendingTXREQ;
-        PendingTrans<CCHI::BundleChannelRSP>    pendingTXRSP;
-        PendingTrans<CCHI::BundleChannelDAT>    pendingTXDAT;
+        CCHI::FCBundle* port;
+        
+        // 全局记分牌指针 (用于校验数据真值)
+        std::unordered_map<paddr_t, globalBoardEntry>* globalBoardPtr = nullptr;
 
-        CCHI::FCBundle*     port;
-    
     public:
-        void        FIRE();
-        void        random_test();
-        void        SEND();
+        FCAgent(int id_start, int id_end) : BaseAgent(id_start, id_end) {}
 
-        void        fire_txevt();
-        void        fire_txreq();
-        void        fire_rxsnp();
-        void        fire_txrsp();
-        void        fire_txdat();
-        void        fire_rxrsp();
-        void        fire_rxdat();
+        void bindPort(CCHI::FCBundle* p) { port = p; }
+        void setGlobalBoard(std::unordered_map<paddr_t, globalBoardEntry>* board) {
+            globalBoardPtr = board;
+        }
+        void offFlight(paddr_t addr, XactType tp) { 
+            switch (tp)
+            {
+                case XactType::EVT:
+                    this->localBoard.at(addr).inflight_evt = false;
+                    break;
+                case XactType::SNP:
+                    this->localBoard.at(addr).inflight_snp = false;
+                    break;
+                case XactType::REQ:
+                    this->localBoard.at(addr).inflight_req = false;
+                    break;
+                default:
+                    assert(false);
+                    break;
+            }
+            if (this->localBoard.at(addr).inflight_evt == false &&
+                this->localBoard.at(addr).inflight_snp == false &&
+                this->localBoard.at(addr).inflight_req == false) {
+                this->localBoard.at(addr).inflight = false;
+            }
+        }
+
+        // 核心循环
+        void FIRE(); // 处理所有通道的握手
+        void SEND(); // 处理发送队列
+        void random_test(); // 产生随机激励
+
+        // 通道处理函数
+        void fire_txevt();
+        void fire_txreq();
+        void fire_rxsnp();
+        void fire_txrsp();
+        void fire_txdat();
+        void fire_rxrsp();
+        void fire_rxdat();
         
-        void        send_txevt(std::shared_ptr<CCHI::BundleChannelEVT> &txevt, uint8_t alias);
-        void        send_txreq(std::shared_ptr<CCHI::BundleChannelREQ> &txreq, uint8_t alias);
-        void        send_txdat(std::shared_ptr<CCHI::BundleChannelDAT> &txdat, uint8_t alias);
-        void        send_txrsp(std::shared_ptr<CCHI::BundleChannelRSP> &txrsp, uint8_t alias);
+        // 底层发包函数
+        void send_txevt(std::shared_ptr<CCHI::BundleChannelEVT> txevt);
+        void send_txreq(std::shared_ptr<CCHI::BundleChannelREQ> txreq);
+        void send_txdat(std::shared_ptr<CCHI::BundleChannelDAT> txdat);
+        void send_txrsp(std::shared_ptr<CCHI::BundleChannelRSP> txrsp);
 
+        // 事务发起接口
+        bool do_ReadNoSnp(paddr_t addr);
+        bool do_ReadOnce(paddr_t addr);
+        bool do_ReadAllocateCacheable(paddr_t addr, uint8_t opcode);
+        bool do_ReadShared(paddr_t addr);
+        bool do_ReadUnique(paddr_t addr);
+        bool do_MakeReadUnique(paddr_t addr);
 
-        bool        do_WriteBackFull(paddr_t addr);
-        bool        do_ReadUnique(paddr_t addr);
+        bool do_EVT(paddr_t addr, uint8_t opcode);
+        bool do_Evict(paddr_t addr);
+        bool do_WriteBackFull(paddr_t addr);
+
+        bool do_MakeUnique(paddr_t addr);
+
+        bool do_CMO(paddr_t addr, uint8_t opcode);
+        bool do_CleanShared(paddr_t addr);
+        bool do_CleanInvalid(paddr_t addr);
+        bool do_MakeInvalid(paddr_t addr);
     };
 }

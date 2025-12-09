@@ -45,14 +45,29 @@ enum class CCHIOpcodeEVT {
 
 enum class CCHIOpcodeREQ {
     StashShared     = 0x0,
-    ReadUnique      = 0x10
+    ReadNoSnp       = 0x02,
+    ReadOnce        = 0x03,
+    ReadShared      = 0x04,
+    ReadUnique      = 0x10,
+    MakeUnique      = 0x12,
+    MakeReadUnique  = 0x13,
+    CleanShared     = 0x0C,
+    CleanInvalid    = 0x0D,
+    MakeInvalid     = 0x0E,
+    
 };
 
-enum class CCHIOpcodeRSP {
+enum class CCHIOpcodeRSP_UP {
     CompStash       = 0,
     Comp            = 1,
     DBIDResp        = 2,
-    CompDBIDResp    = 3
+    CompDBIDResp    = 3,
+    CompCMO         = 4
+};
+
+enum class CCHIOpcodeRSP_DOWN {
+    CompAck         = 0,
+    SnpResp         = 1
 };
 
 enum class CCHIOpcodeDAT_UP {
@@ -85,6 +100,7 @@ namespace CCHI {
         uint8_t     txnID;
         uint8_t     opcode;
         uint64_t    addr;
+        uint8_t     alias;
         uint8_t     ns;
         uint8_t     memAttr;
         uint8_t     wayValid;
@@ -99,6 +115,7 @@ namespace CCHI {
         uint8_t     opcode;
         uint8_t     size;
         uint64_t    addr;
+        uint8_t     alias;
         uint8_t     ns;
         uint8_t     order;
         uint8_t     memAttr;
@@ -135,6 +152,7 @@ namespace CCHI {
     class BundleChannelDAT : public DecoupledBundle {
     public:
         uint8_t     txnID;
+        uint8_t     dbID;
         uint8_t     opcode;
         uint8_t     respErr;
         uint8_t     resp;
@@ -158,7 +176,7 @@ namespace CCHI {
         BundleChannelDAT    rxdat;
     };
 
-    enum class State {
+    enum class CacheState {
         INV = 0,
         UC,
         SC,
