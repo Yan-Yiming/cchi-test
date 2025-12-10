@@ -108,6 +108,7 @@ namespace Xact {
         }
 
         virtual const uint8_t* getData() const { return nullptr; }
+        virtual const void getBeatData(int beat_idx, uint8_t* dst) const { }
         virtual const bool DataDone() const { return false; }
 
     protected:
@@ -191,13 +192,8 @@ namespace Xact {
             }
         }
 
-        const uint8_t* getData() const override {
-            return dataBuffer;
-        }
-
-        const bool DataDone() const override {
-            return gotCompData;
-        }
+        const uint8_t* getData() const override { return dataBuffer; }
+        const bool DataDone() const override { return gotCompData; }
     };
 
     class ReadAllocateCacheable : public Xaction {
@@ -246,13 +242,8 @@ namespace Xact {
             markComplete();
         }
 
-        const uint8_t* getData() const override {
-            return dataBuffer;
-        }
-
-        const bool DataDone() const override {
-            return gotCompData;
-        }
+        const uint8_t* getData() const override { return dataBuffer; }
+        const bool DataDone() const override { return gotCompData; }
     };
 
     class Evict : public Xaction {
@@ -275,16 +266,17 @@ namespace Xact {
 
     class WriteBackFull : public Xaction {
     private:
-        bool gotDBIDResp;
+        bool gotDBIDResp; 
         bool sentCompData;
         int  beatsSent;
+        uint8_t dataBuffer[64];
 
     public:
         WriteBackFull(const CCHI::BundleChannelEVT& evt, uint64_t cycle)
             : Xaction(XactType::EVT, evt.txnID, evt.addr, evt.opcode, cycle),
               gotDBIDResp(false), sentCompData(false), beatsSent(0)
         {
-            // handleTXEVT(evt, cycle);
+            for (int i = 0; i < 64; ++i) dataBuffer[i] = (uint8_t)rand();
             finalState = CCHI::CacheState::INV;
         }
 
@@ -302,8 +294,11 @@ namespace Xact {
             }
         }
 
-        const bool DataDone() const override {
-            return sentCompData;
+        const uint8_t* getData() const override { return dataBuffer; }
+        const bool DataDone() const override { return sentCompData; }
+        const void getBeatData(int beat_idx, uint8_t* dst) const override {
+            assert(beat_idx >= 0 && beat_idx < 2);
+            std::memcpy(dst, dataBuffer + beat_idx * 32, 32);
         }
     };
 
@@ -317,7 +312,6 @@ namespace Xact {
             : Xaction(XactType::REQ, req.txnID, req.addr, req.opcode, cycle),
             gotComp(false), sentCompAck(false)
         {
-            // handleTXEVT(evt, cycle);
             finalState = CCHI::CacheState::UD;
         }
 
@@ -349,6 +343,123 @@ namespace Xact {
             assert((CCHIOpcodeRSP_UP)pkt.opcode == CCHIOpcodeRSP_UP::CompCMO);
             gotCompCMO = true;
             markComplete();
+        }
+    };
+
+    class Stash : public Xaction {
+    private:
+        bool    waitCompStash; // 是否需要等待 CompStash 响应
+        bool    gotCompStash;  // 是否已收到 CompStash
+
+    public:
+        Stash(const CCHI::BundleChannelREQ& req, uint64_t cycle, CCHI::CacheState initial_state)
+            : Xaction(XactType::REQ, req.txnID, req.addr, req.opcode, cycle),
+              waitCompStash(false), gotCompStash(false)
+        {
+            finalState = initial_state;
+            if (req.expCompStash) {
+                waitCompStash = true;
+            }
+        }
+
+        void onTXREQ(const CCHI::BundleChannelREQ& pkt) override {
+            if (!waitCompStash) {
+                markComplete();
+            }
+        }
+
+        void onRXRSP(const CCHI::BundleChannelRSP& pkt) override {
+            if ((CCHIOpcodeRSP_UP)pkt.opcode == CCHIOpcodeRSP_UP::CompStash) {
+                gotCompStash = true;
+                if (waitCompStash) {
+                    markComplete();
+                }
+            }
+        }
+    };
+
+    class WriteNoSnp : public Xaction {
+    private:
+        bool gotCompDBIDResp; // 是否收到合并回复
+        bool sentData;        // 是否完成数据发送
+        int  beatsSent;       // 已发送的数据 Beat 数
+        int  totalBeats;      // 总共需要发送的数据 Beat 数
+        uint8_t dataBuffer[64];
+
+    public:
+        WriteNoSnp(const CCHI::BundleChannelREQ& req, uint64_t cycle)
+            : Xaction(XactType::REQ, req.txnID, req.addr, req.opcode, cycle),
+              gotCompDBIDResp(false), sentData(false), beatsSent(0)
+        {
+            for (int i = 0; i < 64; ++i) dataBuffer[i] = (uint8_t)rand();
+            finalState = CCHI::CacheState::INV;
+            totalBeats = 2; 
+        }
+
+        void onRXRSP(const CCHI::BundleChannelRSP& pkt) override {
+            if ((CCHIOpcodeRSP_UP)pkt.opcode == CCHIOpcodeRSP_UP::CompDBIDResp) {
+                gotCompDBIDResp = true;
+            }
+        }
+
+        void onTXDAT(const CCHI::BundleChannelDAT& pkt) override {
+            assert((CCHIOpcodeDAT_DOWN)pkt.opcode == CCHIOpcodeDAT_DOWN::NonCopyBackWrData);
+            
+            beatsSent++;
+            if (beatsSent >= totalBeats) {
+                sentData = true;
+                markComplete();
+            }
+        }
+
+        const uint8_t* getData() const override { return dataBuffer; }
+        const bool DataDone() const override { return sentData; }
+        const void getBeatData(int beat_idx, uint8_t* dst) const override {
+            assert(beat_idx >= 0 && beat_idx < 2);
+            std::memcpy(dst, dataBuffer + beat_idx * 32, 32);
+        }
+    };
+
+    class WriteUnique : public Xaction {
+    private:
+        bool gotCompDBIDResp; // 是否收到合并回复
+        bool sentData;        // 是否完成数据发送
+        int  beatsSent;
+        int  totalBeats;
+        uint8_t dataBuffer[64];
+
+    public:
+        WriteUnique(const CCHI::BundleChannelREQ& req, uint64_t cycle)
+            : Xaction(XactType::REQ, req.txnID, req.addr, req.opcode, cycle),
+              gotCompDBIDResp(false), sentData(false), beatsSent(0)
+        {
+            for (int i = 0; i < 64; ++i) dataBuffer[i] = (uint8_t)rand();
+            finalState = CCHI::CacheState::INV;
+            totalBeats = 2; 
+        }
+
+        void onRXRSP(const CCHI::BundleChannelRSP& pkt) override {
+            if ((CCHIOpcodeRSP_UP)pkt.opcode == CCHIOpcodeRSP_UP::CompDBIDResp) {
+                gotCompDBIDResp = true;
+            }
+        }
+
+        // 处理发送出的 DAT
+        void onTXDAT(const CCHI::BundleChannelDAT& pkt) override {
+            assert((CCHIOpcodeDAT_DOWN)pkt.opcode == CCHIOpcodeDAT_DOWN::NonCopyBackWrData);
+            
+            beatsSent++;
+            if (beatsSent >= totalBeats) {
+                sentData = true;
+                markComplete();
+            }
+        }
+
+        const uint8_t* getData() const override { return dataBuffer; }
+        const bool DataDone() const override { return sentData; }
+        const void getBeatData(int beat_idx, uint8_t* dst) const override {
+            assert(beat_idx >= 0 && beat_idx < 2);
+            std::memcpy(dst, dataBuffer + beat_idx * 32, 32);
         }
     };
 }

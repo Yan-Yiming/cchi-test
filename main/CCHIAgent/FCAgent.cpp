@@ -62,23 +62,30 @@ namespace CCHIAgent {
                 auto& transaction = it->second;
                 transaction->handleRXRSP(chnRSP, CUR_CYCLE);
 
-                // 3. 特殊逻辑：WriteBack 收到 DBIDResp 后需要发送数据
-                // 这里我们检查 Opcode，如果是 DBIDResp，则触发数据发送
                 if ((CCHIOpcodeRSP_UP)chnRSP.opcode == CCHIOpcodeRSP_UP::CompDBIDResp) {
-                    
-                    // 建立路由映射：后续发数据用 DBID，需要能找回 TxnID
                     this->DBID2TxnID[chnRSP.dbID] = chnRSP.txnID;
 
-                    // 构造数据包 (CopyBackWrData)
                     auto txdat = std::make_shared<CCHI::BundleChannelDAT>();
-                    txdat->txnID  = chnRSP.dbID; // 使用 DBID 作为 TxnID
-                    if (transaction->getOpcode() == (uint8_t)CCHIOpcodeEVT::WriteBackFull) {
-                        txdat->opcode = (uint8_t)CCHIOpcodeDAT_DOWN::CopyBackWrData;
+
+                    txdat->txnID  = chnRSP.dbID;
+                    auto op = transaction->getOpcode();
+                    switch (op) {
+                        case (uint8_t)CCHIOpcodeEVT::WriteBackFull:
+                            txdat->opcode = (uint8_t)CCHIOpcodeDAT_DOWN::CopyBackWrData;
+                            break;
+                        case (uint8_t)CCHIOpcodeREQ::WriteNoSnpFull:
+                        case (uint8_t)CCHIOpcodeREQ::WriteNoSnpPtl:
+                        case (uint8_t)CCHIOpcodeREQ::WriteUniqueFull:
+                        case (uint8_t)CCHIOpcodeREQ::WriteUniquePtl:
+                            txdat->opcode = (uint8_t)CCHIOpcodeDAT_DOWN::NonCopyBackWrData;
+                            break;
+                        default:
+                            assert(false);
+                            break;
                     }
-                    else assert(false);
-                    
-                    // TODO: 这里应该从 XactionWriteBackFull 中获取真实数据
-                    // 目前暂时随机生成，为了跑通流程
+
+                    // TODO: 这里应该从 localboard? 中获取真实数据
+                    // 现在只有一拍数据，暂时随机生成，为了跑通流程
                     for (int i = 0; i < 32; ++i) txdat->data[i] = (uint8_t)rand();
                     
                     pendingTXDAT.init(txdat, 2);
@@ -94,6 +101,7 @@ namespace CCHIAgent {
                     else assert(false);
                 }
                 else if ((CCHIOpcodeRSP_UP)chnRSP.opcode == CCHIOpcodeRSP_UP::CompCMO) { }
+                else if ((CCHIOpcodeRSP_UP)chnRSP.opcode == CCHIOpcodeRSP_UP::CompStash) { }
                 else assert(false);
                 
                 if (transaction->isComplete()) {
@@ -125,11 +133,10 @@ namespace CCHIAgent {
                 }
 
                 if (transaction->DataDone()) {
-                    // [校验] 从 GlobalBoard 验证数据
                     if (globalBoardPtr) {
                         const uint8_t* actual_data = transaction->getData();
-                        if (actual_data) {
-                            paddr_t addr = transaction->getAddr();
+                        paddr_t addr = transaction->getAddr();
+                        if (globalBoardPtr->find(addr) == globalBoardPtr->end()) {
                             (*globalBoardPtr)[addr].verify(actual_data);
                         }
                     }
@@ -170,7 +177,14 @@ namespace CCHIAgent {
                     auto& transaction = it->second;
                     transaction->handleTXDAT(chn, CUR_CYCLE);
                     
-                    // 如果数据发完了，且事务逻辑认为可以结束 (WriteBack 流程)
+                    if (transaction->DataDone()) { 
+                        if (globalBoardPtr) {
+                            const uint8_t* written_data = transaction->getData();
+                            if (written_data) {
+                                (*globalBoardPtr)[transaction->getAddr()].update(written_data);
+                            }
+                        }
+                    }
                     if (transaction->isComplete()) {
                         paddr_t addr = transaction->getAddr();
                         localBoard.at(addr).state = transaction->finalState;
@@ -254,96 +268,138 @@ namespace CCHIAgent {
         this->port->txrsp.txnID  = txrsp->txnID;
     }
 
-    bool FCAgent::do_ReadNoSnp(paddr_t addr) {
+    bool FCAgent::do_EVT(paddr_t addr, uint8_t opcode) {
+        if (pendingTXEVT.is_pending()) return false;
+        if (localBoard.count(addr) != 0 && localBoard.at(addr).inflight_evt) return false;
+
+        // TODO: 
+        auto txevt = std::make_shared<CCHI::BundleChannelEVT>();
+        txevt->txnID  = this->idpool.getid();
+        txevt->opcode = opcode;
+        txevt->addr   = addr;
+
+        std::shared_ptr<Xact::Xaction> xact;
+        if (opcode == (uint8_t)CCHIOpcodeEVT::WriteBackFull) {
+            xact = std::make_shared<Xact::WriteBackFull>(*txevt, CUR_CYCLE);
+        }
+        else if (opcode == (uint8_t)CCHIOpcodeEVT::Evict) {
+            xact = std::make_shared<Xact::Evict>(*txevt, CUR_CYCLE);
+        }
+        else assert(false);
+    
+        this->Transactions.emplace(txevt->txnID, xact);
+
+        if (localBoard.count(addr) == 0) {
+            localBoard.emplace(addr, localBoardEntry(CCHI::CacheState::INV, 0));
+        }
+        auto& entry = localBoard.at(addr);
+        entry.inflight = true;
+        entry.inflight_evt = true;
+
+        pendingTXEVT.init(txevt, 1);
+        return true;
+    }
+
+    bool FCAgent::do_REQ(paddr_t addr, uint8_t opcode, uint8_t size, bool expCompStash) {
         if (pendingTXREQ.is_pending()) return false;
         if (localBoard.count(addr) != 0 && localBoard.at(addr).inflight) return false;
 
         auto txreq = std::make_shared<CCHI::BundleChannelREQ>();
-        txreq->txnID  = this->idpool.getid();
-        txreq->opcode = (uint8_t)CCHIOpcodeREQ::ReadNoSnp;
-        txreq->addr   = addr;
-        txreq->size   = 6; // 假设 64B
-
-        auto xact = std::make_shared<Xact::ReadNoSnp>(*txreq, CUR_CYCLE);
-        this->Transactions.emplace(txreq->txnID, xact);
+        txreq->txnID        = this->idpool.getid();
+        txreq->opcode       = opcode;
+        txreq->size         = size;
+        txreq->addr         = addr;
+        txreq->ns           = 0;        // TODO
+        txreq->order        = 0;        // TODO
+        txreq->memAttr      = 0;        // TODO
+        txreq->excl         = 0;        // TODO
+        txreq->expCompStash = expCompStash;
+        txreq->wayValid     = 0;        // TODO
+        txreq->way          = 0;        // TODO
+        txreq->traceTag     = 0;        // TODO
+        txreq->allowRetry   = 0;        // TODO
 
         if (localBoard.count(addr) == 0) {
             localBoard.emplace(addr, localBoardEntry(CCHI::CacheState::INV, 0));
         }
         localBoard.at(addr).inflight = true;
         localBoard.at(addr).inflight_req = true;
+        CCHI::CacheState current_state = localBoard.at(addr).state;
+
+        std::shared_ptr<Xact::Xaction> xact;
+        switch ((CCHIOpcodeREQ)opcode) {
+            case CCHIOpcodeREQ::StashShared:
+            case CCHIOpcodeREQ::StashUnique:
+                xact = std::make_shared<Xact::Stash>(*txreq, CUR_CYCLE, current_state);
+                break;
+            case CCHIOpcodeREQ::ReadNoSnp:
+                xact = std::make_shared<Xact::ReadNoSnp>(*txreq, CUR_CYCLE);
+                break;
+            case CCHIOpcodeREQ::ReadOnce:
+                xact = std::make_shared<Xact::ReadOnce>(*txreq, CUR_CYCLE);
+                break;
+            case CCHIOpcodeREQ::ReadShared:
+            case CCHIOpcodeREQ::ReadUnique:
+            case CCHIOpcodeREQ::MakeReadUnique:
+                xact = std::make_shared<Xact::ReadAllocateCacheable>(*txreq, CUR_CYCLE);
+                break;
+            case CCHIOpcodeREQ::MakeUnique:
+                xact = std::make_shared<Xact::MakeUnique>(*txreq, CUR_CYCLE);
+                break;
+            case CCHIOpcodeREQ::CleanShared:
+            case CCHIOpcodeREQ::CleanInvalid:
+            case CCHIOpcodeREQ::MakeInvalid:
+                xact = std::make_shared<Xact::CacheManagementOperation>(*txreq, CUR_CYCLE, current_state);
+                break;
+            case CCHIOpcodeREQ::WriteNoSnpFull:
+            case CCHIOpcodeREQ::WriteNoSnpPtl:
+                xact = std::make_shared<Xact::WriteNoSnp>(*txreq, CUR_CYCLE);
+                break;
+            case CCHIOpcodeREQ::WriteUniqueFull:
+            case CCHIOpcodeREQ::WriteUniquePtl:
+                xact = std::make_shared<Xact::WriteUnique>(*txreq, CUR_CYCLE);
+                break;
+            default:
+                assert(false);
+                break;
+        }
+        this->Transactions.emplace(txreq->txnID, xact);
 
         pendingTXREQ.init(txreq, 1);
         return true;
+    }
+
+/*
+    FOR Requester
+    =====================================================
+    Require/CacheState  |   I   |   UC  |   UD  |   SC  |
+    ReadOnce            |   Y   |       |       |       |
+    ReadShared          |   Y   |   Y   |   Y   |   Y   |
+    ReadUnique          |   Y   |   Y   |   Y   |   Y   |
+    MakeReadUnique      |       |       |       |   Y   |
+    =====================================================
+*/
+    bool FCAgent::do_ReadNoSnp(paddr_t addr) {
+        if (localBoard.count(addr)) assert(localBoard.at(addr).state == CCHI::CacheState::INV);
+        return do_REQ(addr, (uint8_t)CCHIOpcodeREQ::ReadNoSnp, 0, 0);
     }
     
     bool FCAgent::do_ReadOnce(paddr_t addr) {
-        if (pendingTXREQ.is_pending()) return false;
-        if (localBoard.count(addr) != 0 && localBoard.at(addr).inflight) return false;
-
-        // 1. 构造 REQ 包
-        auto txreq = std::make_shared<CCHI::BundleChannelREQ>();
-        txreq->txnID  = this->idpool.getid();
-        txreq->opcode = (uint8_t)CCHIOpcodeREQ::ReadOnce;
-        txreq->addr   = addr;
-        txreq->size   = 6; // 假设 64B
-
-        // 2. 创建并注册事务对象
-        auto xact = std::make_shared<Xact::ReadOnce>(*txreq, CUR_CYCLE);
-        this->Transactions.emplace(txreq->txnID, xact);
-
-        // 3. 更新本地记分牌
-        if (localBoard.count(addr) == 0) {
-            localBoard.emplace(addr, localBoardEntry(CCHI::CacheState::INV, 0));
-        }
-        assert(localBoard.at(addr).state == CCHI::CacheState::INV);
-        localBoard.at(addr).inflight = true;
-        localBoard.at(addr).inflight_req = true;
-
-        // 4. 初始化发送
-        pendingTXREQ.init(txreq, 1);
-        return true;
+        if (localBoard.count(addr)) assert(localBoard.at(addr).state == CCHI::CacheState::INV);
+        return do_REQ(addr, (uint8_t)CCHIOpcodeREQ::ReadOnce, 0, 0);
     }
     
     bool FCAgent::do_ReadShared(paddr_t addr) {
-        if (localBoard.count(addr)) {
-            // assert(localBoard.at(addr).state == CCHI::CacheState::INV);
-        }
-        return do_ReadAllocateCacheable(addr, (uint8_t)CCHIOpcodeREQ::ReadShared);
+        return do_REQ(addr, (uint8_t)CCHIOpcodeREQ::ReadShared, 0, 0);
     }
 
     bool FCAgent::do_ReadUnique(paddr_t addr) {
-        if (localBoard.count(addr)) {
-            // assert(localBoard.at(addr).state == CCHI::CacheState::INV);
-        }
-        return do_ReadAllocateCacheable(addr, (uint8_t)CCHIOpcodeREQ::ReadUnique);
+        return do_REQ(addr, (uint8_t)CCHIOpcodeREQ::ReadUnique, 0, 0);
     }
 
-    bool FCAgent::do_ReadAllocateCacheable(paddr_t addr, uint8_t opcode) {
-        if (pendingTXREQ.is_pending()) return false;
-        if (localBoard.count(addr) != 0 && localBoard.at(addr).inflight) return false;
-
-        // 1. 构造 REQ 包
-        auto txreq = std::make_shared<CCHI::BundleChannelREQ>();
-        txreq->txnID  = this->idpool.getid();
-        txreq->opcode = opcode;
-        txreq->addr   = addr;
-        txreq->size   = 6; // 假设 64B
-
-        // 2. 创建并注册事务对象
-        auto xact = std::make_shared<Xact::ReadAllocateCacheable>(*txreq, CUR_CYCLE);
-        this->Transactions.emplace(txreq->txnID, xact);
-
-        // 3. 更新本地记分牌
-        if (localBoard.count(addr) == 0) {
-            localBoard.emplace(addr, localBoardEntry(CCHI::CacheState::INV, 0));
-        }
-        localBoard.at(addr).inflight = true;
-        localBoard.at(addr).inflight_req = true;
-
-        // 4. 初始化发送
-        pendingTXREQ.init(txreq, 1);
-        return true;
+    bool FCAgent::do_MakeReadUnique(paddr_t addr) {
+        if (localBoard.count(addr)) assert(localBoard.at(addr).state == CCHI::CacheState::SC);
+        return do_REQ(addr, (uint8_t)CCHIOpcodeREQ::MakeReadUnique, 0, 0);
     }
 
     bool FCAgent::do_Evict(paddr_t addr) {
@@ -356,99 +412,44 @@ namespace CCHIAgent {
         return do_EVT(addr, (uint8_t)CCHIOpcodeEVT::WriteBackFull);
     }
 
-    bool FCAgent::do_EVT(paddr_t addr, uint8_t opcode) {
-        if (pendingTXEVT.is_pending()) return false;
-        if (localBoard.count(addr) != 0 && localBoard.at(addr).inflight_evt) return false;
-
-        // 1. 构造 EVT 包
-        auto txevt = std::make_shared<CCHI::BundleChannelEVT>();
-        txevt->txnID  = this->idpool.getid();
-        txevt->opcode = opcode;
-        txevt->addr   = addr;
-
-        // 2. [优雅] 创建并注册事务对象
-        std::shared_ptr<Xact::Xaction> xact;
-        if (opcode == (uint8_t)CCHIOpcodeEVT::WriteBackFull) {
-            xact = std::make_shared<Xact::WriteBackFull>(*txevt, CUR_CYCLE);
-        }
-        else if (opcode == (uint8_t)CCHIOpcodeEVT::Evict) {
-            xact = std::make_shared<Xact::Evict>(*txevt, CUR_CYCLE);
-        }
-        else assert(false);
-            
-        this->Transactions.emplace(txevt->txnID, xact);
-
-        // 3. 更新本地记分牌状态
-        if (localBoard.count(addr) == 0) {
-            localBoard.emplace(addr, localBoardEntry(CCHI::CacheState::INV, 0));
-        }
-        auto& entry = localBoard.at(addr);
-        entry.inflight = true;
-        entry.inflight_evt = true;
-
-        // 4. 初始化物理层发送
-        pendingTXEVT.init(txevt, 1);
-        return true;
-    }
-
     bool FCAgent::do_MakeUnique(paddr_t addr) {
-        if (pendingTXREQ.is_pending()) return false;
-        if (localBoard.count(addr) != 0 && localBoard.at(addr).inflight) return false;
-
-        auto txreq = std::make_shared<CCHI::BundleChannelREQ>();
-        txreq->txnID  = this->idpool.getid();
-        txreq->opcode = (uint8_t)CCHIOpcodeREQ::MakeUnique;
-        txreq->addr   = addr;
-
-        auto xact = std::make_shared<Xact::MakeUnique>(*txreq, CUR_CYCLE);
-        this->Transactions.emplace(txreq->txnID, xact);
-
-        if (localBoard.count(addr) == 0) {
-            localBoard.emplace(addr, localBoardEntry(CCHI::CacheState::INV, 0));
-        }
-        localBoard.at(addr).inflight = true;
-        localBoard.at(addr).inflight_req = true;
-
-        pendingTXREQ.init(txreq, 1);
-        return true;
+        if (localBoard.count(addr)) assert(localBoard.at(addr).state != CCHI::CacheState::UD);
+        return do_REQ(addr, (uint8_t)CCHIOpcodeREQ::MakeUnique, 0, 0);
     }
 
     bool FCAgent::do_CleanShared(paddr_t addr) {
-        if (localBoard.count(addr)) assert(localBoard.at(addr).state != CCHI::CacheState::UD);
-        return do_CMO(addr, (uint8_t)CCHIOpcodeREQ::CleanShared);
+        if (localBoard.count(addr)) assert(localBoard.at(addr).state == CCHI::CacheState::INV);
+        return do_REQ(addr, (uint8_t)CCHIOpcodeREQ::CleanShared, 0, 0);
     }
 
     bool FCAgent::do_CleanInvalid(paddr_t addr) {
         if (localBoard.count(addr)) assert(localBoard.at(addr).state == CCHI::CacheState::INV);
-        return do_CMO(addr, (uint8_t)CCHIOpcodeREQ::CleanInvalid);
+        return do_REQ(addr, (uint8_t)CCHIOpcodeREQ::CleanInvalid, 0, 0);
     }
 
     bool FCAgent::do_MakeInvalid(paddr_t addr) {
         if (localBoard.count(addr)) assert(localBoard.at(addr).state == CCHI::CacheState::INV);
-        return do_CMO(addr, (uint8_t)CCHIOpcodeREQ::MakeInvalid);
+        return do_REQ(addr, (uint8_t)CCHIOpcodeREQ::MakeInvalid, 0, 0);
     }
 
-    bool FCAgent::do_CMO(paddr_t addr, uint8_t opcode) {
-        if (pendingTXREQ.is_pending()) return false;
-        if (localBoard.count(addr) != 0 && localBoard.at(addr).inflight) return false;
+    bool FCAgent::do_StashShared(paddr_t addr, bool expCompStash) {
+        return do_REQ(addr, (uint8_t)CCHIOpcodeREQ::StashShared, 0, expCompStash);
+    }
 
-        auto txreq = std::make_shared<CCHI::BundleChannelREQ>();
-        txreq->txnID  = this->idpool.getid();
-        txreq->opcode = opcode;
-        txreq->addr   = addr;
-        
-        if (localBoard.count(addr) == 0) {
-            localBoard.emplace(addr, localBoardEntry(CCHI::CacheState::INV, 0));
-        }
-        auto& entry = localBoard.at(addr);
-        entry.inflight = true;
-        entry.inflight_req = true;
+    bool FCAgent::do_StashUnique(paddr_t addr, bool expCompStash) {
+        return do_REQ(addr, (uint8_t)CCHIOpcodeREQ::StashUnique, 0, expCompStash);
+    }
 
-        auto xact = std::make_shared<Xact::CacheManagementOperation>(*txreq, CUR_CYCLE, localBoard.at(addr).state);
-        this->Transactions.emplace(txreq->txnID, xact);
-        
-        pendingTXREQ.init(txreq, 1);
-        return true;
+    bool FCAgent::do_WriteNoSnp(paddr_t addr, bool full) {
+        if (localBoard.count(addr)) assert(localBoard.at(addr).state == CCHI::CacheState::INV);
+        uint8_t opcode = (uint8_t)(full ? CCHIOpcodeREQ::WriteNoSnpFull : CCHIOpcodeREQ::WriteNoSnpPtl);
+        return do_REQ(addr, opcode, 0, 0);
+    }
+
+    bool FCAgent::do_WriteUnique(paddr_t addr, bool full) {
+        if (localBoard.count(addr)) assert(localBoard.at(addr).state == CCHI::CacheState::INV);
+        uint8_t opcode = (uint8_t)(full ? CCHIOpcodeREQ::WriteUniqueFull : CCHIOpcodeREQ::WriteUniquePtl);
+        return do_REQ(addr, opcode, 0, 0);
     }
 
     void FCAgent::random_test() {

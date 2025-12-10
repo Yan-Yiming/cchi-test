@@ -45,9 +45,14 @@ enum class CCHIOpcodeEVT {
 
 enum class CCHIOpcodeREQ {
     StashShared     = 0x0,
+    StashUnique     = 0x01,
     ReadNoSnp       = 0x02,
     ReadOnce        = 0x03,
     ReadShared      = 0x04,
+    WriteNoSnpPtl   = 0x08,
+    WriteNoSnpFull  = 0x09,
+    WriteUniquePtl  = 0x0A,
+    WriteUniqueFull = 0x0B,
     ReadUnique      = 0x10,
     MakeUnique      = 0x12,
     MakeReadUnique  = 0x13,

@@ -28,46 +28,57 @@ constexpr int CACHE_LINE_SIZE = 64;
 class globalBoardEntry {
     public:
         // 存储 64 字节的缓存行数据
-        uint8_t data[CACHE_LINE_SIZE];
+        std::array<uint8_t, CACHE_LINE_SIZE> data;
     
         // 构造函数：初始化时填充随机数据，模拟内存的初始状态
         inline globalBoardEntry() {
-            for (int i = 0; i < CACHE_LINE_SIZE; ++i) {
-                data[i] = (uint8_t)rand(); 
+            for (auto& byte : data) byte = static_cast<uint8_t>(rand());
+        }
+
+        explicit globalBoardEntry(const uint8_t* src_data) {
+            if (src_data) {
+                std::memcpy(data.data(), src_data, CACHE_LINE_SIZE);
+            } else {
+                // 异常情况给全0或随机
+                 data.fill(0);
             }
         }
-    
+
         // 更新数据 (模拟写回内存 WriteBack)
         // input: new_data 指向 64 字节的完整数据
         void update(const uint8_t* new_data) {
             if (new_data) {
-                std::memcpy(this->data, new_data, CACHE_LINE_SIZE);
+                std::memcpy(data.data(), new_data, CACHE_LINE_SIZE);
             }
         }
-    
-        // 校验数据 (模拟读取验证 Read Verify)
-        // input: dut_data 是 DUT (Device Under Test) 读回来的数据
-        bool verify(const uint8_t* dut_data) const {
-            if (std::memcmp(this->data, dut_data, CACHE_LINE_SIZE) != 0) {
-                print_error(dut_data);
+
+        // 校验数据 (模拟 Read Verify)
+        // 返回 true 表示校验通过
+        bool verify(const uint8_t* dut_data, uint64_t addr = 0) const {
+            if (std::memcmp(data.data(), dut_data, CACHE_LINE_SIZE) != 0) {
+                print_error(dut_data, addr);
                 return false;
             }
             return true;
         }
     
     private:
-        // 辅助函数：打印数据不一致的详细信息
-        void print_error(const uint8_t* dut_data) const {
-            std::cerr << "[ScoreBoard] Error: Data Mismatch!" << std::endl;
-            std::cerr << "  Expected (Golden): ";
-            for (int i = 0; i < CACHE_LINE_SIZE; ++i) 
-                std::cerr << std::hex << std::setw(2) << std::setfill('0') << (int)this->data[i] << " ";
-            std::cerr << std::endl;
-    
-            std::cerr << "  Actual   (DUT)   : ";
-            for (int i = 0; i < CACHE_LINE_SIZE; ++i) 
-                std::cerr << std::hex << std::setw(2) << std::setfill('0') << (int)dut_data[i] << " ";
-            std::cerr << std::dec << std::endl; // 恢复十进制
-        }
+    void print_error(const uint8_t* dut_data, uint64_t addr) const {
+        std::cerr << "\n[ScoreBoard] \033[1;31mError: Data Mismatch!\033[0m Address: 0x" 
+                    << std::hex << addr << std::dec << std::endl;
+        
+        auto print_line = [](const char* label, const uint8_t* d) {
+            std::cerr << label;
+            for (size_t i = 0; i < CACHE_LINE_SIZE; ++i) {
+                if (i % 16 == 0 && i != 0) std::cerr << "\n" << std::string(strlen(label), ' ');
+                std::cerr << std::hex << std::setw(2) << std::setfill('0') << (int)d[i] << " ";
+            }
+            std::cerr << std::dec << std::endl;
+        };
+
+        print_line("  Expected (Golden): ", data.data());
+        print_line("  Actual   (DUT)   : ", dut_data);
+        std::cerr << std::endl;
+    }
 };
     

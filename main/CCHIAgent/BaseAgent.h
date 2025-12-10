@@ -158,22 +158,31 @@ namespace CCHIAgent {
         void send_txrsp(std::shared_ptr<CCHI::BundleChannelRSP> txrsp);
 
         // 事务发起接口
+
+        bool do_REQ(paddr_t addr, uint8_t opcode, uint8_t size, bool expCompStash);
+        bool do_EVT(paddr_t addr, uint8_t opcode);
+
         bool do_ReadNoSnp(paddr_t addr);
         bool do_ReadOnce(paddr_t addr);
-        bool do_ReadAllocateCacheable(paddr_t addr, uint8_t opcode);
         bool do_ReadShared(paddr_t addr);
         bool do_ReadUnique(paddr_t addr);
         bool do_MakeReadUnique(paddr_t addr);
 
-        bool do_EVT(paddr_t addr, uint8_t opcode);
         bool do_Evict(paddr_t addr);
         bool do_WriteBackFull(paddr_t addr);
 
         bool do_MakeUnique(paddr_t addr);
 
-        bool do_CMO(paddr_t addr, uint8_t opcode);
         bool do_CleanShared(paddr_t addr);
         bool do_CleanInvalid(paddr_t addr);
         bool do_MakeInvalid(paddr_t addr);
+
+        bool do_Stash(paddr_t addr, uint8_t opcode, bool expCompStash);
+        bool do_StashShared(paddr_t addr, bool expCompStash);
+        bool do_StashUnique(paddr_t addr, bool expCompStash);
+
+        bool do_WriteNoSnp(paddr_t addr, bool full);
+        bool do_WriteUnique(paddr_t addr, bool full);
+
     };
 }
