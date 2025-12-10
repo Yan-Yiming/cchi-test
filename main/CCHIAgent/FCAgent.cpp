@@ -300,8 +300,6 @@ namespace CCHIAgent {
         this->SnpID2TxnID[snpTxnID] = txnID;
         this->Transactions.emplace(txnID, snpXact); 
 
-        if (localBoard.count(addr)) localBoard.at(addr).state = newState;
-
         if (sendData) {
             auto txdat = std::make_shared<CCHI::BundleChannelDAT>();
             txdat->txnID = snpTxnID; 
