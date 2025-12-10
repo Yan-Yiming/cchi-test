@@ -87,6 +87,11 @@ namespace Xact {
             onTXEVT(pkt);
         }
 
+        void handleRXSNP(const CCHI::BundleChannelSNP& pkt, uint64_t cycle) {
+            snp_history.push_back({cycle, pkt});
+            onRXSNP(pkt);
+        }
+
         void handleTXRSP(const CCHI::BundleChannelRSP& pkt, uint64_t cycle) {
             txrsp_history.push_back({cycle, pkt});
             onTXRSP(pkt);
@@ -115,6 +120,7 @@ namespace Xact {
         // --- 子类钩子 (Hooks) ---
         virtual void onTXREQ(const CCHI::BundleChannelREQ& pkt) {}
         virtual void onTXEVT(const CCHI::BundleChannelEVT& pkt) {}
+        virtual void onRXSNP(const CCHI::BundleChannelSNP& pkt) {}
         virtual void onTXRSP(const CCHI::BundleChannelRSP& pkt) {}
         virtual void onRXRSP(const CCHI::BundleChannelRSP& pkt) {}
         virtual void onTXDAT(const CCHI::BundleChannelDAT& pkt) {}
@@ -460,6 +466,52 @@ namespace Xact {
         const void getBeatData(int beat_idx, uint8_t* dst) const override {
             assert(beat_idx >= 0 && beat_idx < 2);
             std::memcpy(dst, dataBuffer + beat_idx * 32, 32);
+        }
+    };
+
+    class SnoopOperation : public Xaction {
+    private:
+        bool sentResp;          // 是否已发送响应 (RSP 或 DAT)
+        bool hasData;           // 本次 Snoop 是否包含数据传输
+        int  beatsSent;         // 已发送的数据拍数
+        int  totalBeats;        // 总数据拍数
+        uint8_t dataBuffer[64]; // 模拟的 Dirty 数据
+
+    public:
+        // 构造函数
+        SnoopOperation(const CCHI::BundleChannelSNP& snp, uint64_t cycle, bool data_response)
+            : Xaction(XactType::SNP, snp.txnID, snp.addr, snp.opcode, cycle),
+              sentResp(false), hasData(data_response), beatsSent(0), totalBeats(2)
+        {
+            if (hasData) for (int i = 0; i < 64; ++i) dataBuffer[i] = (uint8_t)rand();
+            else std::memset(dataBuffer, 0, 64);
+            finalState = CCHI::CacheState::INV; 
+        }
+
+        void onRXSNP(const CCHI::BundleChannelSNP& pkt) override { }
+
+        void onTXRSP(const CCHI::BundleChannelRSP& pkt) override {
+            sentResp = true;
+            markComplete();
+        }
+
+        void onTXDAT(const CCHI::BundleChannelDAT& pkt) override {
+            if (hasData) {
+                beatsSent++;
+                if (beatsSent >= totalBeats) {
+                    sentResp = true;
+                    markComplete();
+                }
+            }
+        }
+
+        const uint8_t* getData() const override { return hasData ? dataBuffer : nullptr; }
+        const bool DataDone() const override { return sentResp; }
+        const void getBeatData(int beat_idx, uint8_t* dst) const override {
+            if (hasData) {
+                assert(beat_idx >= 0 && beat_idx < 2);
+                std::memcpy(dst, dataBuffer + beat_idx * 32, 32);
+            } else std::memset(dst, 0, 32);
         }
     };
 }

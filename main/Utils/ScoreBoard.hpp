@@ -19,7 +19,6 @@ public:
     inline localBoardEntry(CCHI::CacheState state, uint8_t dirty) :
         state(state), dirty(dirty), inflight(false), inflight_evt(false), inflight_snp(false), inflight_req(false) { }
     
-    // 默认析构函数即可
     inline ~localBoardEntry() = default;
 };
 

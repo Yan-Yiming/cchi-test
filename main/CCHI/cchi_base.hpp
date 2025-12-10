@@ -44,7 +44,7 @@ enum class CCHIOpcodeEVT {
 };
 
 enum class CCHIOpcodeREQ {
-    StashShared     = 0x0,
+    StashShared     = 0x00,
     StashUnique     = 0x01,
     ReadNoSnp       = 0x02,
     ReadOnce        = 0x03,
@@ -59,7 +59,13 @@ enum class CCHIOpcodeREQ {
     CleanShared     = 0x0C,
     CleanInvalid    = 0x0D,
     MakeInvalid     = 0x0E,
-    
+};
+
+enum class CCHIOpcodeSNP {
+    SnpMakeInvalid  = 0x00,
+    SnpToInvalid    = 0x01,
+    SnpToShared     = 0x02,
+    SnpToClean      = 0x03
 };
 
 enum class CCHIOpcodeRSP_UP {

@@ -19,7 +19,25 @@ namespace CCHIAgent {
         // 轮询发送队列，如果有待发送的 Beat，尝试发送
         if (pendingTXEVT.is_pending()) send_txevt(pendingTXEVT.info);
         if (pendingTXREQ.is_pending()) send_txreq(pendingTXREQ.info);
-        if (pendingTXDAT.is_pending()) send_txdat(pendingTXDAT.info);
+        if (pendingTXDAT.is_pending()) {
+            auto& info = pendingTXDAT.info;
+            int current_beat = pendingTXDAT.nr_beat - pendingTXDAT.beat_cnt;
+            
+            if (DBID2TxnID.count(info->txnID)) {
+                uint16_t tid = DBID2TxnID[info->txnID];
+                if (Transactions.count(tid)) {
+                    Transactions[tid]->getBeatData(current_beat, info->data);
+                }
+            } 
+            // snoop
+            else if (SnpID2TxnID.count(info->txnID)) {
+                auto originTxnID = SnpID2TxnID[info->txnID];
+                auto& xact = Transactions[originTxnID];
+                xact->getBeatData(current_beat, info->data);
+            }
+            else assert(false);
+            send_txdat(info);
+        }
         if (pendingTXRSP.is_pending()) send_txrsp(pendingTXRSP.info);
     }
 
@@ -231,9 +249,69 @@ namespace CCHIAgent {
     }
 
     void FCAgent::fire_rxsnp() {
-        // Snoop 处理逻辑暂时留空，通常需要查找 localBoard 并生成 SnpResp
-        if (this->port->rxsnp.fire()) {
-            // TODO: Implement Snoop logic
+        bool resource_available = !pendingTXRSP.is_pending() && !pendingTXDAT.is_pending();
+        this->port->rxsnp.ready = resource_available;
+        if (!this->port->rxsnp.fire()) return;
+
+        auto& chnSNP = this->port->rxsnp; 
+
+        paddr_t addr = chnSNP.addr;
+        uint16_t snpTxnID = chnSNP.txnID;
+        uint8_t opcode = chnSNP.opcode;
+
+        CCHI::CacheState curState = CCHI::CacheState::INV;
+        bool isDirty = false;
+        
+        if (localBoard.count(addr)) {
+            curState = localBoard.at(addr).state;
+            isDirty = (curState == CCHI::CacheState::UD);
+        }
+
+        CCHI::CacheState newState = CCHI::CacheState::INV;
+        bool sendData = false;
+
+        switch ((CCHIOpcodeSNP)opcode) {
+            case CCHIOpcodeSNP::SnpMakeInvalid:
+                newState = CCHI::CacheState::INV;
+                sendData = false; 
+                break;
+            case CCHIOpcodeSNP::SnpToInvalid:
+                newState = CCHI::CacheState::INV;
+                sendData = isDirty; // Dirty 必须回写
+                break;
+            case CCHIOpcodeSNP::SnpToShared:
+                newState = (curState == CCHI::CacheState::INV) ? CCHI::CacheState::INV : CCHI::CacheState::SC;
+                sendData = isDirty; // Dirty 变 Shared，同时也需要把脏数据吐出来给 Home/Req
+                break;
+            default: // SnpToClean 等
+                newState = CCHI::CacheState::INV;
+                sendData = isDirty;
+                break;
+        }
+
+        auto snpXact = std::make_shared<Xact::SnoopOperation>(chnSNP, CUR_CYCLE, sendData);
+        snpXact->finalState = newState;
+        
+        snpXact->handleRXSNP(chnSNP, CUR_CYCLE); 
+
+        // 注意：TxnID 可能会冲突，工业级 VIP 会用独立 Map，这里简化复用 Transactions
+        // 或者我们可以给 Snoop ID 加一个 offset 区分
+        auto txnID = idpool.getid();
+        this->SnpID2TxnID[snpTxnID] = txnID;
+        this->Transactions.emplace(txnID, snpXact); 
+
+        if (localBoard.count(addr)) localBoard.at(addr).state = newState;
+
+        if (sendData) {
+            auto txdat = std::make_shared<CCHI::BundleChannelDAT>();
+            txdat->txnID = snpTxnID; 
+            txdat->opcode = (uint8_t)CCHIOpcodeDAT_DOWN::SnpRespData;
+            pendingTXDAT.init(txdat, 2); 
+        } else {
+            auto txrsp = std::make_shared<CCHI::BundleChannelRSP>();
+            txrsp->txnID = snpTxnID;
+            txrsp->opcode = (uint8_t)CCHIOpcodeRSP_DOWN::SnpResp;
+            pendingTXRSP.init(txrsp, 1);
         }
     }
 

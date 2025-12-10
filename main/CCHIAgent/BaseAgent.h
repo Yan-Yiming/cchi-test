@@ -14,10 +14,10 @@
 #include "../Utils/ScoreBoard.hpp"
 
 typedef uint64_t paddr_t;
+#define SNPID_OFFSET  0x100
 
 namespace CCHIAgent {
 
-    // 发送队列辅助类：负责将一个逻辑包拆分为多个物理 Beat 发送
     template<typename T>
     class PendingTrans {
     public:
@@ -75,7 +75,7 @@ namespace CCHIAgent {
     class BaseAgent {
     public:
         IDPool idpool;
-        uint64_t* cycles; // 指向仿真时间的指针
+        uint64_t* cycles;
 
         BaseAgent(int id_start, int id_end) : idpool(id_start, id_end), cycles(nullptr) {}
         virtual ~BaseAgent() = default;
@@ -89,8 +89,9 @@ namespace CCHIAgent {
         // 核心存储：TxnID -> 事务对象 (多态基类指针)
         std::unordered_map<uint16_t, std::shared_ptr<Xact::Xaction>> Transactions;
         
-        // 路由表：DBID -> TxnID (用于 WriteBack 数据通道的路由)
+        // 路由表：DBID -> TxnID, SnpID -> TxnID
         std::unordered_map<uint16_t, uint16_t> DBID2TxnID;
+        std::unordered_map<uint16_t, uint16_t> SnpID2TxnID;
         
         // 本地记分牌：维护 Cache 状态 (MESI)
         std::unordered_map<paddr_t, localBoardEntry> localBoard;
@@ -99,8 +100,8 @@ namespace CCHIAgent {
         PendingTrans<CCHI::BundleChannelEVT> pendingTXEVT;
         PendingTrans<CCHI::BundleChannelREQ> pendingTXREQ;
         PendingTrans<CCHI::BundleChannelRSP> pendingTXRSP;
-        PendingTrans<CCHI::BundleChannelDAT> pendingTXDAT; // 发送数据
-        // 注意：接收侧 pendingRXDAT 不需要了，因为逻辑由 Xaction 内部处理
+        PendingTrans<CCHI::BundleChannelDAT> pendingTXDAT;
+        PendingTrans<CCHI::BundleChannelSNP> pendingRXSNP;
 
         CCHI::FCBundle* port;
         
@@ -158,7 +159,6 @@ namespace CCHIAgent {
         void send_txrsp(std::shared_ptr<CCHI::BundleChannelRSP> txrsp);
 
         // 事务发起接口
-
         bool do_REQ(paddr_t addr, uint8_t opcode, uint8_t size, bool expCompStash);
         bool do_EVT(paddr_t addr, uint8_t opcode);
 
