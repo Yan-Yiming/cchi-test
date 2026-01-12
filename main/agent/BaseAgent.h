@@ -9,8 +9,8 @@
 #include <unordered_map>
 #include <iostream>
 
-#include "../CCHI/cchi_xact.h"
-#include "../CCHI/cchi_base.hpp"
+#include "../cchi/cchi_xact.h"
+#include "../cchi/cchi_base.hpp"
 #include "../Utils/ScoreBoard.hpp"
 
 typedef uint64_t paddr_t;

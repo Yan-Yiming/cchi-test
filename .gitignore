@@ -1,2 +1,6 @@
 /build
 chi_sim
+.scala-build
+.bsp
+.metals
+.vscode

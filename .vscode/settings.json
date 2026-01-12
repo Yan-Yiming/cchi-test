@@ -71,5 +71,8 @@
         "execution": "cpp",
         "locale": "cpp"
     },
-    "C_Cpp.errorSquiggles": "enabled"
+    "C_Cpp.errorSquiggles": "enabled",
+    "files.watcherExclude": {
+        "**/target": true
+    }
 }

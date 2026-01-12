@@ -8,8 +8,8 @@
 #include <memory>
 #include <iostream>
 #include <cstring>
-#include "../CCHI/cchi_base.hpp"
-#include "../CCHI/cchi_opcode.hpp"
+#include "../cchi/cchi_base.hpp"
+#include "../cchi/cchi_opcode.hpp"
 
 // =============================================================================
 // 类: MockL2Cache

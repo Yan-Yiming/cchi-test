@@ -1,0 +1,3 @@
+[submodule "main/dut/CoupledL2"]
+	path = main/dut/CoupledL2
+	url = https://github.com/Yan-Yiming/CoupledL2.git

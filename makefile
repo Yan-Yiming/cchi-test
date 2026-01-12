@@ -26,18 +26,23 @@ CXX      := g++
 # -O2        : 开启二级优化 (Optimize)，让程序跑得更快
 # -MMD -MP   : [魔法选项] 自动生成依赖文件(.d)。
 #              如果你修改了 .h 头文件，Make 会自动发现并重新编译包含它的 .cpp
-CXXFLAGS := -std=c++17 -Wall -Wextra -g -O2 -MMD -MP
+CXXFLAGS := -std=c++17 -Wall -Wextra -g -O2 -MMD -MP -DVM_TRACE=1 -DVM_TRACE_FST=1
 
 # 头文件搜索路径 (Includes):
 # -I 告诉编译器去哪里找 #include "..." 的文件
-# 这里添加 'main' 目录，这样代码里就可以写 #include "DUT/MockL2Cache.h" 而不用写 ../DUT/...
-INCLUDES := -Imain
+INCLUDES := -Imain \
+			-I$(VERILATOR_ROOT)/include \
+            -I$(VERILATOR_ROOT)/include/vltstd \
+			-I./verilated
 
 # 最终生成的可执行文件的名字
 TARGET   := chi_sim
 
 # 构建目录: 所有的中间文件 (.o, .d) 都会被扔到这个文件夹里，保持源码目录干净
 BUILD_DIR := build
+
+# DUT 目录: 存放 Verilog 源文件的地方
+DUT_DIR := ./main/dut/CoupledL2
 
 # ------------------------------------------------------------------------------
 # 2. 文件列表 (Files)
@@ -48,8 +53,8 @@ BUILD_DIR := build
 # 使用反斜杠 (\) 来换行，看起来更清晰
 SRCS     := main/main.cpp \
             main/CHISequencer.cpp \
-            main/CCHIAgent/FCAgent.cpp \
-            main/DUT/MockL2Cache.cpp
+            main/agent/FCAgent.cpp \
+            main/cdut/MockL2Cache.cpp
 
 # 对象文件列表 (OBJS):
 # 这是一个"变量替换"操作。
@@ -78,9 +83,9 @@ all: $(TARGET)
 # 目标: $(TARGET) (即 chi_sim)
 # 依赖: $(OBJS)   (即所有的 .o 文件)
 # 动作: 调用 g++ 把所有 .o 文件合并成一个可执行文件
-$(TARGET): $(OBJS)
+$(TARGET): $(OBJS) $(VLT_DIR)/vltdut.a
 	@echo "  [LINK] 正在生成最终可执行文件: $@"
-	@$(CXX) $(OBJS) -o $@
+	@$(CXX) $(OBJS) $(LDFLAGS) -o $@
 	@echo "构建成功！输入 './$(TARGET)' 开始运行。"
 
 # --- 编译规则 (Compiling) ---
@@ -104,6 +109,29 @@ $(BUILD_DIR)/%.o: %.cpp
 # 把编译器自动生成的 .d 文件包含进来。
 # 前面的 '-' 表示如果文件不存在也不要报错 (第一次编译时肯定不存在)
 -include $(DEPS)
+
+
+coupledL2-verilog:
+	@echo "  [CHISEL] 正在生成 TestTop Verilog..."
+	$(MAKE) -C $(DUT_DIR) test-top-cchi-dummyl2
+
+# 第二步：调用 Verilator 将 Verilog 转为 C++ 库
+# 使用 --lib-create 生成静态库 vltdut.a，方便后续链接
+coupledL2-verilate: coupledL2-verilog
+	@echo "  [VERILATOR] 正在将 Verilog 编译为静态库..."
+	@rm -rf $(VLT_DIR)
+	@mkdir -p $(VLT_DIR)
+	verilator --trace-fst --cc --build --lib-create vltdut \
+		--Mdir $(VLT_DIR) \
+		$(DUT_DIR)/build/*.v \
+		-Wno-fatal \
+		--top TestTop \
+		--build-jobs $(THREADS_BUILD) \
+		--verilate-jobs $(THREADS_BUILD) \
+		-DSIM_TOP_MODULE_NAME=TestTop
+
+# 快捷入口：一键完成硬件构建
+$(VLT_DIR)/vltdut.a: coupledL2-verilate
 
 # --- 清理规则 ---
 # 删除 build 目录和最终的可执行文件

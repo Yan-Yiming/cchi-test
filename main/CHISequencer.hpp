@@ -1,6 +1,6 @@
 #include <cstdint>
 #include <unordered_map>
-#include "CCHIAgent/BaseAgent.h"
+#include "agent/BaseAgent.h"
 
 class CHISequencer {
 public:
