@@ -28,6 +28,8 @@ CXX      := g++
 #              如果你修改了 .h 头文件，Make 会自动发现并重新编译包含它的 .cpp
 CXXFLAGS := -std=c++17 -Wall -Wextra -g -O2 -MMD -MP -DVM_TRACE=1 -DVM_TRACE_FST=1
 
+VERILATOR_ROOT ?= $(shell verilator -V | grep VERILATOR_ROOT | head -1 | awk '{print $$3}')
+
 # 头文件搜索路径 (Includes):
 # -I 告诉编译器去哪里找 #include "..." 的文件
 INCLUDES := -Imain \
@@ -54,7 +56,6 @@ DUT_DIR := ./main/dut/CoupledL2
 SRCS     := main/main.cpp \
             main/CHISequencer.cpp \
             main/agent/FCAgent.cpp \
-            main/cdut/MockL2Cache.cpp
 
 # 对象文件列表 (OBJS):
 # 这是一个"变量替换"操作。
@@ -79,13 +80,15 @@ DEPS := $(OBJS:.o=.d)
 # 当你只输入 'make' 时，它会寻找第一个目标，也就是这个 'all'
 all: $(TARGET)
 
+V_DIR = ./verilated
+
 # --- 链接规则 (Linking) ---
 # 目标: $(TARGET) (即 chi_sim)
 # 依赖: $(OBJS)   (即所有的 .o 文件)
 # 动作: 调用 g++ 把所有 .o 文件合并成一个可执行文件
-$(TARGET): $(OBJS) $(VLT_DIR)/vltdut.a
+$(TARGET): $(OBJS) coupledL2-verilate
 	@echo "  [LINK] 正在生成最终可执行文件: $@"
-	@$(CXX) $(OBJS) $(LDFLAGS) -o $@
+	@$(CXX)  $(OBJS) -L./verilated -lvltdut -lz -latomic -Wl,-rpath,$(V_DIR) $(LDFLAGS) -o $@
 	@echo "构建成功！输入 './$(TARGET)' 开始运行。"
 
 # --- 编译规则 (Compiling) ---
@@ -119,19 +122,16 @@ coupledL2-verilog:
 # 使用 --lib-create 生成静态库 vltdut.a，方便后续链接
 coupledL2-verilate: coupledL2-verilog
 	@echo "  [VERILATOR] 正在将 Verilog 编译为静态库..."
-	@rm -rf $(VLT_DIR)
-	@mkdir -p $(VLT_DIR)
+	@rm -rf verilated
+	@mkdir verilated
 	verilator --trace-fst --cc --build --lib-create vltdut \
-		--Mdir $(VLT_DIR) \
-		$(DUT_DIR)/build/*.v \
+		--Mdir verilated \
+		$(DUT_DIR)/build/*.sv \
 		-Wno-fatal \
-		--top TestTop \
+		--top TestTop_CCHITEST_L2 \
 		--build-jobs $(THREADS_BUILD) \
 		--verilate-jobs $(THREADS_BUILD) \
 		-DSIM_TOP_MODULE_NAME=TestTop
-
-# 快捷入口：一键完成硬件构建
-$(VLT_DIR)/vltdut.a: coupledL2-verilate
 
 # --- 清理规则 ---
 # 删除 build 目录和最终的可执行文件

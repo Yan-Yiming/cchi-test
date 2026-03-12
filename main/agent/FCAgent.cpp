@@ -1,5 +1,6 @@
 // cchi-test/main/CCHIAgent/FCAgent.cpp
 #include "BaseAgent.h"
+#include <iostream>
 
 #define CUR_CYCLE (this->cycles ? *this->cycles : 0)
 
@@ -17,8 +18,8 @@ namespace CCHIAgent {
 
     void FCAgent::SEND() {
         // 轮询发送队列，如果有待发送的 Beat，尝试发送
-        if (pendingTXEVT.is_pending()) send_txevt(pendingTXEVT.info);
-        if (pendingTXREQ.is_pending()) send_txreq(pendingTXREQ.info);
+        if (pendingTXEVT.is_pending() && !this->port->txevt.valid) send_txevt(pendingTXEVT.info);
+        if (pendingTXREQ.is_pending() && !this->port->txreq.valid) send_txreq(pendingTXREQ.info);
         if (pendingTXDAT.is_pending()) {
             auto& info = pendingTXDAT.info;
             int current_beat = pendingTXDAT.nr_beat - pendingTXDAT.beat_cnt;
@@ -155,7 +156,7 @@ namespace CCHIAgent {
                         const uint8_t* actual_data = transaction->getData();
                         paddr_t addr = transaction->getAddr();
                         if (globalBoardPtr->find(addr) == globalBoardPtr->end()) {
-                            (*globalBoardPtr)[addr].verify(actual_data);
+                            (*globalBoardPtr)[addr].verify(actual_data, addr);
                         }
                     }
 
@@ -517,6 +518,7 @@ namespace CCHIAgent {
     }
 
     bool FCAgent::do_WriteNoSnp(paddr_t addr, bool full) {
+        if (localBoard.count(addr)) std::cout << (int)(localBoard.at(addr).state) << "\n";
         if (localBoard.count(addr)) assert(localBoard.at(addr).state == CCHI::CacheState::INV);
         uint8_t opcode = (uint8_t)(full ? CCHIOpcodeREQ::WriteNoSnpFull : CCHIOpcodeREQ::WriteNoSnpPtl);
         return do_REQ(addr, opcode, 0, 0);
@@ -530,7 +532,14 @@ namespace CCHIAgent {
 
     void FCAgent::random_test() {
         if (rand() % 100 < 5) { // 5% 概率
-            do_ReadUnique(0x8000 + (rand() % 16) * 64); // 随机地址
+            paddr_t random_addr = 0x8000 + (rand() % 16) * 64;
+            std::cout << "doing Read at " << random_addr << std::endl;
+            do_ReadUnique(random_addr); // 随机地址
+        }
+        else if (rand() % 100 < 5){
+            paddr_t random_addr = 0x8000 + (rand() % 16) * 64;
+            std::cout << "doing Write at " << random_addr << std::endl;
+            do_WriteNoSnp(random_addr, true);
         }
     }
 

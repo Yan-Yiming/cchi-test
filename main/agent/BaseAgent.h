@@ -109,9 +109,10 @@ namespace CCHIAgent {
         std::unordered_map<paddr_t, globalBoardEntry>* globalBoardPtr = nullptr;
 
     public:
+        void bindPort(CCHI::FCBundle* p) { port = p; }
+        
         FCAgent(int id_start, int id_end) : BaseAgent(id_start, id_end) {}
 
-        void bindPort(CCHI::FCBundle* p) { port = p; }
         void setGlobalBoard(std::unordered_map<paddr_t, globalBoardEntry>* board) {
             globalBoardPtr = board;
         }

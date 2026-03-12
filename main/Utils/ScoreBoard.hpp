@@ -3,8 +3,8 @@
 #include <iostream>
 #include <iomanip> // for hex output
 #include <vector>
-#include "../CCHI/cchi_base.hpp"
-#include "../CCHI/cchi_xact.h"
+#include "../cchi/cchi_base.hpp"
+#include "../cchi/cchi_xact.h"
 
 class localBoardEntry {
 public:
@@ -31,7 +31,7 @@ class globalBoardEntry {
     
         // 构造函数：初始化时填充随机数据，模拟内存的初始状态
         inline globalBoardEntry() {
-            for (auto& byte : data) byte = static_cast<uint8_t>(rand());
+            for (auto& byte : data) byte = static_cast<uint8_t>(0);
         }
 
         explicit globalBoardEntry(const uint8_t* src_data) {
@@ -53,7 +53,7 @@ class globalBoardEntry {
 
         // 校验数据 (模拟 Read Verify)
         // 返回 true 表示校验通过
-        bool verify(const uint8_t* dut_data, uint64_t addr = 0) const {
+        bool verify(const uint8_t* dut_data, uint64_t addr) const {
             if (std::memcmp(data.data(), dut_data, CACHE_LINE_SIZE) != 0) {
                 print_error(dut_data, addr);
                 return false;

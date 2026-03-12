@@ -1,6 +1,9 @@
 /build
+/verilated
 chi_sim
 .scala-build
 .bsp
 .metals
 .vscode
+*.fst
+*.fst.hier
